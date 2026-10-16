@@ -143,6 +143,7 @@ our output in AutoCAD black-box.
 | 2026-10-12 | minor | Dynamic block references: visibility states can be changed and are saved as AutoCAD saves them |
 | 2026-10-12 | minor | Dynamic block references: definition, values and custom properties read (`blocks.reference`, Properties ▸ Custom) |
 | 2026-10-12 | minor | Dynamic block data row: parameters and actions read into a model (`blocks.dynamic`); kept by DXF and DWG save |
+| 2026-10-16 | minor | DWG save keeps the drawing's current layer (CLAYER): acadrust's DXF reader kept only the name, the DWG writer needs the layer handle and fell back to layer 0 |
 | 2026-10-12 | minor | Multiline attributes (embedded MTEXT) read, drawn and written back instead of losing their text |
 | 2026-10-11 | minor | Rows refreshed for merged work: code pages and `\M+` (#505), MULTILEADER (#459), IMAGE, MLINE/HELIX/REGION/TOLERANCE, VPORT/VIEW/UCS tables, modelled and raw objects, foreign data (#528), DWT templates and user `.lin`/`.pat`/`.pgp` files (#552), PDF output (#567, #571), plotter devices (#564), data extraction (#433, #534); weighted percentages not re-measured |
 | 2026-10-11 | minor | DXF (ASCII and binary) and DWG saved at 2000–2018, 2018 by default (#421) |

@@ -385,6 +385,15 @@ mod native {
         convert(dxf, Some(v))
     }
 
+    /// acadrust's DXF reader keeps `$CLAYER` as a name only, while the DWG writer takes the
+    /// current layer from a handle and falls back to layer `0` when there is none. Point the
+    /// handle at the named layer so a DWG keeps the drawing's current layer.
+    fn resolve_current_layer(doc: &mut acadrust::CadDocument) {
+        if let Some(layer) = doc.layers.get(&doc.header.current_layer_name) {
+            doc.header.current_layer_handle = layer.handle;
+        }
+    }
+
     fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
         let data = dxf.to_vec();
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
@@ -400,6 +409,7 @@ mod native {
         }
         table_style_rows(&mut doc, true);
         drop_unwritable(&mut doc);
+        resolve_current_layer(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))
@@ -452,5 +462,18 @@ mod tests {
     fn garbage_is_an_error_not_a_crash() {
         assert!(dwg_to_dxf(b"AC1032 this is not a dwg file at all").is_err());
         assert!(dwg_to_dxf(b"").is_err());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn dwg_keeps_the_current_layer() {
+        let mut doc = acadrust::CadDocument::new();
+        doc.layers.add(acadrust::tables::Layer::new("Archi")).expect("add layer");
+        doc.header.current_layer_name = "Archi".to_string();
+        let dxf = acadrust::DxfWriter::new(&doc).write_to_vec().expect("write dxf");
+        let dwg = dxf_to_dwg(&dxf).expect("dxf to dwg");
+        let back = dwg_to_dxf(&dwg).expect("dwg to dxf");
+        let text = String::from_utf8_lossy(&back);
+        assert!(text.contains("$CLAYER\r\n  8\r\nArchi\r\n"), "current layer lost in the DWG");
     }
 }
