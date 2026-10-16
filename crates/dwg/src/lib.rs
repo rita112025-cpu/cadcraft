@@ -87,6 +87,7 @@ mod native {
         let mut doc = outcome.document;
         table_merges(&mut doc);
         table_style_rows(&mut doc, false);
+        name_current_styles(&mut doc);
         let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false };
         let written = std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DxfWriter::new(&doc).write_to_writer(&mut out)))
             .map_err(|_| "the DWG→DXF conversion failed on this file".to_string())?;
@@ -385,12 +386,48 @@ mod native {
         convert(dxf, Some(v))
     }
 
-    /// acadrust's DXF reader keeps `$CLAYER` as a name only, while the DWG writer takes the
-    /// current layer from a handle and falls back to layer `0` when there is none. Point the
-    /// handle at the named layer so a DWG keeps the drawing's current layer.
-    fn resolve_current_layer(doc: &mut acadrust::CadDocument) {
+    /// The reverse of [`resolve_current_styles`]: acadrust's DWG reader turns only the current
+    /// layer's handle into a name, so the current text style, dimension style and linetype would
+    /// be written to DXF as the defaults. Name them from their handles.
+    fn name_current_styles(doc: &mut acadrust::CadDocument) {
+        let h = &doc.header;
+        let text = doc
+            .text_styles
+            .iter()
+            .find(|s| !h.current_text_style_handle.is_null() && s.handle == h.current_text_style_handle)
+            .map(|s| s.name.clone());
+        let dim =
+            doc.dim_styles.iter().find(|s| !h.current_dimstyle_handle.is_null() && s.handle == h.current_dimstyle_handle).map(|s| s.name.clone());
+        let line =
+            doc.line_types.iter().find(|l| !h.current_linetype_handle.is_null() && l.handle == h.current_linetype_handle).map(|l| l.name.clone());
+        if let Some(name) = text {
+            doc.header.current_text_style_name = name;
+        }
+        if let Some(name) = dim {
+            doc.header.current_dimstyle_name = name;
+        }
+        if let Some(name) = line {
+            doc.header.current_linetype_name = name;
+        }
+    }
+
+    /// acadrust's DXF reader keeps the current layer, text style, dimension style and linetype
+    /// (`$CLAYER`, `$TEXTSTYLE`, `$DIMSTYLE`, `$CELTYPE`) as names only, while the DWG writer
+    /// takes them from handles and falls back to layer `0`, text style and dimension style
+    /// `Standard` and `ByLayer` when there is none. Point each handle at the named table entry
+    /// so a DWG keeps the drawing's current settings.
+    fn resolve_current_styles(doc: &mut acadrust::CadDocument) {
         if let Some(layer) = doc.layers.get(&doc.header.current_layer_name) {
             doc.header.current_layer_handle = layer.handle;
+        }
+        if let Some(style) = doc.text_styles.get(&doc.header.current_text_style_name) {
+            doc.header.current_text_style_handle = style.handle;
+        }
+        if let Some(style) = doc.dim_styles.get(&doc.header.current_dimstyle_name) {
+            doc.header.current_dimstyle_handle = style.handle;
+        }
+        if let Some(linetype) = doc.line_types.get(&doc.header.current_linetype_name) {
+            doc.header.current_linetype_handle = linetype.handle;
         }
     }
 
@@ -409,7 +446,7 @@ mod native {
         }
         table_style_rows(&mut doc, true);
         drop_unwritable(&mut doc);
-        resolve_current_layer(&mut doc);
+        resolve_current_styles(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))
@@ -475,5 +512,24 @@ mod tests {
         let back = dwg_to_dxf(&dwg).expect("dwg to dxf");
         let text = String::from_utf8_lossy(&back);
         assert!(text.contains("$CLAYER\r\n  8\r\nArchi\r\n"), "current layer lost in the DWG");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn dwg_keeps_the_current_styles() {
+        let mut doc = acadrust::CadDocument::new();
+        doc.text_styles.add(acadrust::tables::TextStyle::new("Mono")).expect("add text style");
+        doc.dim_styles.add(acadrust::tables::DimStyle::new("Dim2")).expect("add dim style");
+        doc.line_types.add(acadrust::tables::LineType::new("Hidden2")).expect("add linetype");
+        doc.header.current_text_style_name = "Mono".to_string();
+        doc.header.current_dimstyle_name = "Dim2".to_string();
+        doc.header.current_linetype_name = "Hidden2".to_string();
+        let dxf = acadrust::DxfWriter::new(&doc).write_to_vec().expect("write dxf");
+        let dwg = dxf_to_dwg(&dxf).expect("dxf to dwg");
+        let back = dwg_to_dxf(&dwg).expect("dwg to dxf");
+        let text = String::from_utf8_lossy(&back);
+        assert!(text.contains("$TEXTSTYLE\r\n  7\r\nMono\r\n"), "current text style lost in the DWG");
+        assert!(text.contains("$DIMSTYLE\r\n  2\r\nDim2\r\n"), "current dimension style lost in the DWG");
+        assert!(text.contains("$CELTYPE\r\n  6\r\nHidden2\r\n"), "current linetype lost in the DWG");
     }
 }
