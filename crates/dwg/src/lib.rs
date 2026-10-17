@@ -418,6 +418,32 @@ mod native {
         }
     }
 
+    /// acadrust's DWG writer keeps only the `ACAD_MLEADERSTYLE` dictionary's entries as the names
+    /// of multileader styles, so a style that is not listed there is written without its name.
+    /// List every named style in the dictionary before writing.
+    fn list_multileader_styles(doc: &mut acadrust::CadDocument) {
+        let styles: Vec<(String, acadrust::Handle)> = doc
+            .objects
+            .values()
+            .filter_map(|object| match object {
+                acadrust::objects::ObjectType::MultiLeaderStyle(style) if !style.name.is_empty() => Some((style.name.clone(), style.handle)),
+                _ => None,
+            })
+            .collect();
+        let dict = match doc.objects.get(&doc.header.named_objects_dict_handle) {
+            Some(acadrust::objects::ObjectType::Dictionary(root)) => root.get("ACAD_MLEADERSTYLE"),
+            _ => None,
+        };
+        let Some(dict) = dict else { return };
+        if let Some(acadrust::objects::ObjectType::Dictionary(d)) = doc.objects.get_mut(&dict) {
+            for (name, handle) in styles {
+                if !d.entries.iter().any(|(_, h)| *h == handle) {
+                    d.entries.push((name, handle));
+                }
+            }
+        }
+    }
+
     /// acadrust's DXF reader keeps the current layer, text style, dimension style and linetype
     /// (`$CLAYER`, `$TEXTSTYLE`, `$DIMSTYLE`, `$CELTYPE`) as names only, while the DWG writer
     /// takes them from handles and falls back to layer `0`, text style and dimension style
@@ -461,6 +487,7 @@ mod native {
         table_style_rows(&mut doc, true);
         drop_unwritable(&mut doc);
         resolve_current_styles(&mut doc);
+        list_multileader_styles(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))
@@ -551,5 +578,33 @@ mod tests {
         assert!(text.contains("$DIMSTYLE\r\n  2\r\nDim2\r\n"), "current dimension style lost in the DWG");
         assert!(text.contains("$CELTYPE\r\n  6\r\nHidden2\r\n"), "current linetype lost in the DWG");
         assert!(text.contains("$CMLSTYLE\r\n  2\r\nWall\r\n"), "current multiline style lost in the DWG");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn dwg_keeps_table_and_multileader_styles() {
+        use acadrust::entities::{EntityType, MultiLeader, Table};
+        use acadrust::objects::{MultiLeaderStyle, ObjectType, TableStyle};
+        let mut doc = acadrust::CadDocument::new();
+        let table_style = doc.allocate_handle();
+        let mut ts = TableStyle::new("Tbl2");
+        ts.handle = table_style;
+        doc.objects.insert(table_style, ObjectType::TableStyle(ts));
+        let leader_style = doc.allocate_handle();
+        let mut ms = MultiLeaderStyle::new("ML2");
+        ms.handle = leader_style;
+        doc.objects.insert(leader_style, ObjectType::MultiLeaderStyle(ms));
+        let mut table = Table::new(acadrust::types::Vector3::new(0.0, 0.0, 0.0), 2, 2);
+        table.table_style_handle = Some(table_style);
+        doc.add_entity(EntityType::Table(Box::new(table))).expect("add table");
+        let mut leader = MultiLeader::new();
+        leader.style_handle = Some(leader_style);
+        doc.add_entity(EntityType::MultiLeader(Box::new(leader))).expect("add multileader");
+        let dxf = acadrust::DxfWriter::new(&doc).write_to_vec().expect("write dxf");
+        let dwg = dxf_to_dwg(&dxf).expect("dxf to dwg");
+        let back = dwg_to_dxf(&dwg).expect("dwg to dxf");
+        let text = String::from_utf8_lossy(&back);
+        assert!(text.contains("Tbl2"), "table style lost in the DWG");
+        assert!(text.contains("ML2"), "multileader style name lost in the DWG");
     }
 }
