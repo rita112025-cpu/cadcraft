@@ -409,6 +409,13 @@ mod native {
         if let Some(name) = line {
             doc.header.current_linetype_name = name;
         }
+        let multiline = doc.objects.values().find_map(|object| match object {
+            acadrust::objects::ObjectType::MLineStyle(style) if style.handle == doc.header.current_multiline_style_handle => Some(style.name.clone()),
+            _ => None,
+        });
+        if let Some(name) = multiline {
+            doc.header.multiline_style = name;
+        }
     }
 
     /// acadrust's DXF reader keeps the current layer, text style, dimension style and linetype
@@ -428,6 +435,13 @@ mod native {
         }
         if let Some(linetype) = doc.line_types.get(&doc.header.current_linetype_name) {
             doc.header.current_linetype_handle = linetype.handle;
+        }
+        let multiline = doc.objects.values().find_map(|object| match object {
+            acadrust::objects::ObjectType::MLineStyle(style) if style.name == doc.header.multiline_style => Some(style.handle),
+            _ => None,
+        });
+        if let Some(handle) = multiline {
+            doc.header.current_multiline_style_handle = handle;
         }
     }
 
@@ -524,6 +538,11 @@ mod tests {
         doc.header.current_text_style_name = "Mono".to_string();
         doc.header.current_dimstyle_name = "Dim2".to_string();
         doc.header.current_linetype_name = "Hidden2".to_string();
+        let mline = doc.allocate_handle();
+        let mut wall = acadrust::objects::MLineStyle::new("Wall");
+        wall.handle = mline;
+        doc.objects.insert(mline, acadrust::objects::ObjectType::MLineStyle(wall));
+        doc.header.multiline_style = "Wall".to_string();
         let dxf = acadrust::DxfWriter::new(&doc).write_to_vec().expect("write dxf");
         let dwg = dxf_to_dwg(&dxf).expect("dxf to dwg");
         let back = dwg_to_dxf(&dwg).expect("dwg to dxf");
@@ -531,5 +550,6 @@ mod tests {
         assert!(text.contains("$TEXTSTYLE\r\n  7\r\nMono\r\n"), "current text style lost in the DWG");
         assert!(text.contains("$DIMSTYLE\r\n  2\r\nDim2\r\n"), "current dimension style lost in the DWG");
         assert!(text.contains("$CELTYPE\r\n  6\r\nHidden2\r\n"), "current linetype lost in the DWG");
+        assert!(text.contains("$CMLSTYLE\r\n  2\r\nWall\r\n"), "current multiline style lost in the DWG");
     }
 }
